@@ -15,6 +15,10 @@
   const trees = [];
   let wood = 0;
 
+  // Canvas secundário para o terreno
+  const terrainCanvas = document.createElement('canvas');
+  const terrainCtx = terrainCanvas.getContext('2d');
+
   let offsetX = 0, offsetY = 0;
   let scale = 1;
 
@@ -25,16 +29,13 @@
   let date;
   let tool = 'paint_land';
 
-  // Variáveis para o novo pincel
   let brushPos = null;
 
-  // Referências aos novos elementos da UI
   const categoryButtons = document.querySelectorAll('#category-bar button');
   const toolPanels = document.querySelectorAll('.tool-panel');
   const toolButtons = document.querySelectorAll('.tool-button');
   const backButtons = document.querySelectorAll('#back-button');
 
-  // Evento para botões de categoria
   categoryButtons.forEach(button => {
     button.addEventListener('click', () => {
       categoryButtons.forEach(btn => btn.classList.remove('active'));
@@ -46,7 +47,6 @@
     });
   });
 
-  // Evento para o botão de "voltar"
   backButtons.forEach(button => {
     button.addEventListener('click', () => {
         toolPanels.forEach(panel => panel.classList.remove('active'));
@@ -56,7 +56,6 @@
     });
   });
 
-  // Evento para seleção de ferramentas
   toolButtons.forEach(button => {
     button.addEventListener('click', () => {
       toolButtons.forEach(btn => btn.classList.remove('active'));
@@ -65,7 +64,6 @@
     });
   });
 
-  // Outros elementos de UI
   document.getElementById('brush').addEventListener('input', e => brushSize = +e.target.value);
   document.getElementById('speed').addEventListener('input', e => speedMul = +e.target.value);
   document.getElementById('pause').addEventListener('click', () => {
@@ -87,7 +85,6 @@
   const infoAge = document.getElementById('info-age');
   const infoHP = document.getElementById('info-hp');
   
-  // Variáveis para a UI
   const humansCountEl = document.getElementById('humansCount');
   const woodCountEl = document.getElementById('woodCount');
 
@@ -123,7 +120,7 @@
         const nx = this.x + Math.cos(this.dir) * speed * dt * 6;
         const ny = this.y + Math.sin(this.dir) * speed * dt * 6;
         const ix = Math.floor(nx), iy = Math.floor(ny);
-        if (inBounds(ix, iy) && terrain[idx(ix, iy)] === LAND) {
+        if (inBounds(ix, iy) && terrain[idx(ix, iy)] > 0.5) { // Ajuste para terreno semi-sólido
           this.x = nx;
           this.y = ny;
         } else {
@@ -237,8 +234,13 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     w = Math.floor(mapSize / MAP_SCALE);
     h = Math.floor(mapSize / MAP_SCALE);
-    terrain = new Uint8Array(w * h);
+    terrain = new Float32Array(w * h); // Alterado para Float32Array para valores decimais
     fire = new Uint8Array(w * h);
+    
+    // Configura o canvas do terreno
+    terrainCanvas.width = w * TILE;
+    terrainCanvas.height = h * TILE;
+    
     generateIslands();
   }
   window.addEventListener('resize', resize);
@@ -255,10 +257,11 @@
         const r = Math.hypot(dxc, dyc);
         const n = Math.random() * 0.15 - 0.075;
         const v = (0.7 - r) + n;
-        terrain[idx(x, y)] = v > 0 ? LAND : WATER;
+        terrain[idx(x, y)] = v > 0 ? 1 : 0;
       }
     }
     humans.length = 0;
+    drawTerrain(); // Renderiza o mapa após a geração
   }
 
   function resetWorld() {
@@ -335,47 +338,69 @@
   let lastPinchDist = 0;
 
   function forBrush(cx, cy, r, fn) {
+    let changed = false;
     for (let y = Math.floor(cy - r); y <= Math.ceil(cy + r); y++) {
       for (let x = Math.floor(cx - r); x <= Math.ceil(cx + r); x++) {
         const dist = Math.hypot(x - cx, y - cy);
         if (dist <= r) {
           const intensity = 1 - (dist / r);
-          if (inBounds(x, y)) fn(x, y, intensity);
+          if (inBounds(x, y)) {
+            const oldValue = terrain[idx(x, y)];
+            const newValue = fn(oldValue, intensity);
+            if (newValue !== oldValue) {
+              terrain[idx(x, y)] = newValue;
+              changed = true;
+            }
+          }
         }
       }
+    }
+    if (changed) {
+        drawTerrain();
     }
   }
 
   function applyTool(x, y) {
     if (tool === 'paint_land') {
-        forBrush(x, y, brushSize, (px, py, intensity) => {
-            const current = terrain[idx(px, py)];
-            const target = LAND;
-            terrain[idx(px, py)] = Math.round(current + (target - current) * intensity);
+        forBrush(x, y, brushSize, (current, intensity) => {
+            return Math.min(1, current + 0.1 * intensity);
         });
     } else if (tool === 'paint_water' || tool === 'erase') {
-        forBrush(x, y, brushSize, (px, py, intensity) => {
-            const current = terrain[idx(px, py)];
-            const target = WATER;
-            terrain[idx(px, py)] = Math.round(current + (target - current) * intensity);
-            fire[idx(px,py)] = 0;
+        forBrush(x, y, brushSize, (current, intensity) => {
+            return Math.max(0, current - 0.1 * intensity);
         });
     } else {
         // Ferramentas que não precisam de suavização
         switch (tool) {
-            case 'paint_all_land': terrain.fill(LAND); break;
-            case 'paint_all_water': terrain.fill(WATER); break;
-            case 'spawn_human': if (terrain[idx(Math.floor(x), Math.floor(y))] === LAND) spawnHuman(x, y); break;
-            case 'spawn_seed': if (terrain[idx(Math.floor(x), Math.floor(y))] === LAND) trees.push(new Tree(Math.floor(x), Math.floor(y))); break;
-            case 'fire': if (terrain[idx(Math.floor(x), Math.floor(y))] === LAND) fire[idx(Math.floor(x), Math.floor(y))] = 255; break;
+            case 'paint_all_land': terrain.fill(1); drawTerrain(); break;
+            case 'paint_all_water': terrain.fill(0); drawTerrain(); break;
+            case 'spawn_human': if (terrain[idx(Math.floor(x), Math.floor(y))] > 0.5) spawnHuman(x, y); break;
+            case 'spawn_seed': if (terrain[idx(Math.floor(x), Math.floor(y))] > 0.5) trees.push(new Tree(Math.floor(x), Math.floor(y))); break;
+            case 'fire': if (terrain[idx(Math.floor(x), Math.floor(y))] > 0.5) fire[idx(Math.floor(x), Math.floor(y))] = 255; break;
             case 'rain': if (fire[idx(Math.floor(x), Math.floor(y))] > 0) fire[idx(Math.floor(x), Math.floor(y))] = Math.max(0, fire[idx(Math.floor(x), Math.floor(y))] - 220); break;
         }
     }
   }
 
+  // NOVA FUNÇÃO: Desenha o terreno apenas quando necessário
+  function drawTerrain() {
+      terrainCtx.clearRect(0, 0, w * TILE, h * TILE);
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const c = terrain[idx(x, y)];
+          const landColor = [22, 101, 52];
+          const waterColor = [3, 105, 161];
+          const r = Math.round(waterColor[0] + (landColor[0] - waterColor[0]) * c);
+          const g = Math.round(waterColor[1] + (landColor[1] - waterColor[1]) * c);
+          const b = Math.round(waterColor[2] + (landColor[2] - waterColor[2]) * c);
+          terrainCtx.fillStyle = `rgb(${r},${g},${b})`;
+          terrainCtx.fillRect(x * TILE, y * TILE, TILE, TILE);
+        }
+      }
+  }
+
   function spawnHuman(x, y) { humans.push(new Human(x, y)); updateCounts(); }
   
-  // Função para atualizar as contagens na UI
   function updateCounts() {
     humansCountEl.textContent = `Humanos: ${humans.length}`;
     woodCountEl.textContent = `Madeira: ${wood}`;
@@ -480,7 +505,7 @@
             const ny = y + (Math.random() < 0.5 ? -1 : 1);
             if (inBounds(nx, ny)) {
               const nid = idx(nx, ny);
-              if (terrain[nid] === LAND && fire[nid] < 120) { toAdd.push(nid) }
+              if (terrain[nid] > 0.5 && fire[nid] < 120) { toAdd.push(nid) } // Ajuste para terreno semi-sólido
             }
           }
         }
@@ -496,19 +521,8 @@
     ctx.translate(offsetX, offsetY);
     ctx.scale(scale, scale);
     
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        // Interpola a cor com base no valor do terreno
-        const c = terrain[idx(x,y)];
-        const landColor = [22, 101, 52]; // #166534
-        const waterColor = [3, 105, 161]; // #0369a1
-        const r = Math.round(waterColor[0] + (landColor[0] - waterColor[0]) * c);
-        const g = Math.round(waterColor[1] + (landColor[1] - waterColor[1]) * c);
-        const b = Math.round(waterColor[2] + (landColor[2] - waterColor[2]) * c);
-        ctx.fillStyle = `rgb(${r},${g},${b})`;
-        ctx.fillRect(x * TILE, y * TILE, TILE, TILE);
-      }
-    }
+    // Desenha o canvas pré-renderizado do terreno
+    ctx.drawImage(terrainCanvas, 0, 0);
 
     for(const tree of trees) {
       tree.draw(ctx);
@@ -535,7 +549,6 @@
       h.draw(ctx);
     }
     
-    // Desenha o pincel
     if (brushPos && (tool === 'paint_land' || tool === 'paint_water' || tool === 'erase')) {
       const radius = brushSize * TILE;
       ctx.beginPath();

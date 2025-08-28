@@ -83,6 +83,10 @@
   const infoName = document.getElementById('info-name');
   const infoAge = document.getElementById('info-age');
   const infoHP = document.getElementById('info-hp');
+  
+  // Variáveis para a UI
+  const humansCountEl = document.getElementById('humansCount');
+  const woodCountEl = document.getElementById('woodCount'); // Novo elemento de madeira
 
   class Human {
     constructor(x, y) {
@@ -261,6 +265,7 @@
     trees.length = 0;
     wood = 0;
     date = new Date(1900, 0, 1, 5, 57, 0);
+    updateCounts();
   }
 
   resetWorld();
@@ -364,8 +369,12 @@
   }
 
   function spawnHuman(x, y) { humans.push(new Human(x, y)); updateCounts(); }
-
-  function updateCounts() { document.getElementById('humansCount').textContent = String(humans.length) }
+  
+  // Função para atualizar as contagens na UI
+  function updateCounts() {
+    humansCountEl.textContent = `Humanos: ${humans.length}`;
+    woodCountEl.textContent = `Madeira: ${wood}`;
+  }
 
   function inspectHuman(x, y) {
     let nearestHuman = null;

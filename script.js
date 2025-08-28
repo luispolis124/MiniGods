@@ -25,6 +25,9 @@
   let date;
   let tool = 'paint_land';
 
+  // Variáveis para o novo pincel
+  let brushPos = null;
+
   // Referências aos novos elementos da UI
   const categoryButtons = document.querySelectorAll('#category-bar button');
   const toolPanels = document.querySelectorAll('.tool-panel');
@@ -86,7 +89,7 @@
   
   // Variáveis para a UI
   const humansCountEl = document.getElementById('humansCount');
-  const woodCountEl = document.getElementById('woodCount'); // Novo elemento de madeira
+  const woodCountEl = document.getElementById('woodCount');
 
   class Human {
     constructor(x, y) {
@@ -275,7 +278,10 @@
     e.preventDefault();
     canvas.setPointerCapture(e.pointerId);
     lastPointers.push(e);
-    handleInput(e);
+    const pos = getMapPos(e);
+    if (inBounds(Math.floor(pos.x), Math.floor(pos.y))) {
+      applyTool(pos.x, pos.y);
+    }
   });
   canvas.addEventListener('pointermove', e => {
     e.preventDefault();
@@ -285,15 +291,37 @@
         break;
       }
     }
+    const pos = getMapPos(e);
+    brushPos = {x: pos.x, y: pos.y};
     if (e.buttons === 1 || e.pointerType === 'touch') {
-      handleInput(e);
+      if (inBounds(Math.floor(pos.x), Math.floor(pos.y))) {
+        applyTool(pos.x, pos.y);
+      }
+    }
+    if (lastPointers.length === 2) {
+      const [p1, p2] = lastPointers;
+      const currentDist = Math.hypot(p1.clientX - p2.clientX, p1.clientY - p2.clientY);
+      if (lastPinchDist === 0) { lastPinchDist = currentDist; return; }
+      const delta = currentDist - lastPinchDist;
+      scale += delta * 0.005;
+      scale = Math.max(0.5, Math.min(2, scale));
+      lastPinchDist = currentDist;
+    } else if (lastPointers.length === 1 && e.pointerType === 'mouse' && e.buttons === 1) {
+      const dx = e.movementX;
+      const dy = e.movementY;
+      offsetX += dx;
+      offsetY += dy;
+    } else if (lastPointers.length === 1 && e.pointerType === 'touch') {
+      const dx = e.clientX - (e.prevX || e.clientX);
+      const dy = e.clientY - (e.prevY || e.clientY);
+      offsetX += dx;
+      offsetY += dy;
+      e.prevX = e.clientX; e.prevY = e.clientY;
     }
   });
   canvas.addEventListener('pointerup', e => {
     lastPointers = lastPointers.filter(p => p.pointerId !== e.pointerId);
-    if (e.pointerType === 'mouse' && e.button === 0) {
-      handleInput(e);
-    }
+    brushPos = null;
   });
 
   function getMapPos(e) {
@@ -305,66 +333,43 @@
   }
 
   let lastPinchDist = 0;
-  function handleInput(e) {
-    if (lastPointers.length === 2 && e.type.includes('pointermove')) {
-      const [p1, p2] = lastPointers;
-      const currentDist = Math.hypot(p1.clientX - p2.clientX, p1.clientY - p2.clientY);
-      if (lastPinchDist === 0) { lastPinchDist = currentDist; return; }
-      const delta = currentDist - lastPinchDist;
-      scale += delta * 0.005;
-      scale = Math.max(0.5, Math.min(2, scale));
-      lastPinchDist = currentDist;
-    } else if (lastPointers.length === 1 && e.type.includes('pointermove') && e.pointerType === 'mouse' && e.buttons === 1) {
-      const dx = e.movementX;
-      const dy = e.movementY;
-      offsetX += dx;
-      offsetY += dy;
-    } else if (lastPointers.length === 1 && e.type.includes('pointermove') && e.pointerType === 'touch') {
-      const dx = e.clientX - (e.prevX || e.clientX);
-      const dy = e.clientY - (e.prevY || e.clientY);
-      offsetX += dx;
-      offsetY += dy;
-      e.prevX = e.clientX; e.prevY = e.clientY;
-    }
-    
-    // Ferramentas só funcionam quando não há pan
-    if (e.pointerType === 'touch' || e.buttons !== 1) {
-      const { x, y } = getMapPos(e);
-      if (inBounds(Math.floor(x), Math.floor(y))) {
-        if (e.type.includes('pointermove') && (e.pointerType === 'mouse' && e.buttons === 1 || e.pointerType === 'touch')) {
-          forBrush(Math.floor(x), Math.floor(y), (px, py) => applyTool(px, py));
-        } else if (e.type.includes('pointerup') && e.pointerType === 'mouse' && e.button === 0 && tool !== 'inspect_human') {
-          forBrush(Math.floor(x), Math.floor(y), (px, py) => applyTool(px, py));
-        } else if (e.type.includes('pointerdown') && tool === 'inspect_human') {
-          inspectHuman(x, y);
-        }
-      }
-    }
-  }
 
-  function forBrush(cx, cy, fn) {
-    const r = brushSize;
-    for (let y = -r; y <= r; y++) {
-      for (let x = -r; x <= r; x++) {
-        if (x * x + y * y <= r * r) {
-          const px = cx + x, py = cy + y;
-          if (inBounds(px, py)) fn(px, py);
+  function forBrush(cx, cy, r, fn) {
+    for (let y = Math.floor(cy - r); y <= Math.ceil(cy + r); y++) {
+      for (let x = Math.floor(cx - r); x <= Math.ceil(cx + r); x++) {
+        const dist = Math.hypot(x - cx, y - cy);
+        if (dist <= r) {
+          const intensity = 1 - (dist / r);
+          if (inBounds(x, y)) fn(x, y, intensity);
         }
       }
     }
   }
 
   function applyTool(x, y) {
-    switch (tool) {
-      case 'paint_land': terrain[idx(x, y)] = LAND; break;
-      case 'paint_all_land': terrain.fill(LAND); break;
-      case 'paint_water':
-      case 'erase': terrain[idx(x, y)] = WATER; fire[idx(x, y)] = 0; break;
-      case 'paint_all_water': terrain.fill(WATER); break;
-      case 'spawn_human': if (terrain[idx(x, y)] === LAND) spawnHuman(x + Math.random(), y + Math.random()); break;
-      case 'spawn_seed': if (terrain[idx(x, y)] === LAND) trees.push(new Tree(x, y)); break;
-      case 'fire': if (terrain[idx(x, y)] === LAND) fire[idx(x, y)] = 255; break;
-      case 'rain': if (fire[idx(x, y)] > 0) fire[idx(x, y)] = Math.max(0, fire[idx(x, y)] - 220); break;
+    if (tool === 'paint_land') {
+        forBrush(x, y, brushSize, (px, py, intensity) => {
+            const current = terrain[idx(px, py)];
+            const target = LAND;
+            terrain[idx(px, py)] = Math.round(current + (target - current) * intensity);
+        });
+    } else if (tool === 'paint_water' || tool === 'erase') {
+        forBrush(x, y, brushSize, (px, py, intensity) => {
+            const current = terrain[idx(px, py)];
+            const target = WATER;
+            terrain[idx(px, py)] = Math.round(current + (target - current) * intensity);
+            fire[idx(px,py)] = 0;
+        });
+    } else {
+        // Ferramentas que não precisam de suavização
+        switch (tool) {
+            case 'paint_all_land': terrain.fill(LAND); break;
+            case 'paint_all_water': terrain.fill(WATER); break;
+            case 'spawn_human': if (terrain[idx(Math.floor(x), Math.floor(y))] === LAND) spawnHuman(x, y); break;
+            case 'spawn_seed': if (terrain[idx(Math.floor(x), Math.floor(y))] === LAND) trees.push(new Tree(Math.floor(x), Math.floor(y))); break;
+            case 'fire': if (terrain[idx(Math.floor(x), Math.floor(y))] === LAND) fire[idx(Math.floor(x), Math.floor(y))] = 255; break;
+            case 'rain': if (fire[idx(Math.floor(x), Math.floor(y))] > 0) fire[idx(Math.floor(x), Math.floor(y))] = Math.max(0, fire[idx(Math.floor(x), Math.floor(y))] - 220); break;
+        }
     }
   }
 
@@ -493,7 +498,14 @@
     
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
-        ctx.fillStyle = (terrain[idx(x, y)] === WATER) ? '#0369a1' : '#166534';
+        // Interpola a cor com base no valor do terreno
+        const c = terrain[idx(x,y)];
+        const landColor = [22, 101, 52]; // #166534
+        const waterColor = [3, 105, 161]; // #0369a1
+        const r = Math.round(waterColor[0] + (landColor[0] - waterColor[0]) * c);
+        const g = Math.round(waterColor[1] + (landColor[1] - waterColor[1]) * c);
+        const b = Math.round(waterColor[2] + (landColor[2] - waterColor[2]) * c);
+        ctx.fillStyle = `rgb(${r},${g},${b})`;
         ctx.fillRect(x * TILE, y * TILE, TILE, TILE);
       }
     }
@@ -523,6 +535,16 @@
       h.draw(ctx);
     }
     
+    // Desenha o pincel
+    if (brushPos && (tool === 'paint_land' || tool === 'paint_water' || tool === 'erase')) {
+      const radius = brushSize * TILE;
+      ctx.beginPath();
+      ctx.arc(brushPos.x * TILE, brushPos.y * TILE, radius, 0, 2 * Math.PI);
+      ctx.strokeStyle = '#fca5a5';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+
     ctx.restore();
   }
 
